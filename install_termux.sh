@@ -1,9 +1,8 @@
 #!/bin/bash
 
 ################################################################################
-# JV93 Installation Script for Termux
+# JV93 Installation Script for Termux (FIXED for Termux packages)
 # Cryptocurrency Mining + Wallet + Free Tunnels
-# Install on Android with Termux: pkg install git && git clone https://github.com/sdoukoure12/JV93 && bash JV93/install_termux.sh
 ################################################################################
 
 set -e
@@ -24,7 +23,6 @@ log_warning() { echo -e "${YELLOW}[⚠]${NC} $1"; }
 if [[ -n "$TERMUX_VERSION" ]]; then
     REPO_DIR="$HOME/jv93"
     LOG_FILE="$HOME/jv93.log"
-    PREFIX="$PREFIX"
 else
     log_error "This script is for Termux only!"
     log_info "Install Termux from Google Play Store or F-Droid"
@@ -48,11 +46,10 @@ update_packages() {
 install_dependencies() {
     log_info "Installing dependencies (this may take a while)..."
     
-    # Essential packages
+    # Termux correct package names
     apt install -y \
         python \
-        python-dev \
-        pip \
+        python-pip \
         git \
         wget \
         curl \
@@ -60,9 +57,6 @@ install_dependencies() {
         nano \
         openssh \
         openssl \
-        openssl-dev \
-        libffi \
-        libffi-dev \
         sqlite \
         gnupg \
         tmux \
@@ -70,14 +64,13 @@ install_dependencies() {
         net-tools \
         jq \
         nodejs \
-        nodejs-npm \
+        npm \
         build-essential \
-        clang \
-        make \
-        cmake \
         pkg-config \
+        libffi \
         libtool \
-        autoconf
+        autoconf \
+        make
     
     log_success "Dependencies installed"
 }
@@ -113,23 +106,30 @@ setup_python_env() {
 install_tunnels() {
     log_info "Installing tunnel tools..."
     
-    # Bore
+    # Bore CLI
     log_info "Installing Bore..."
-    npm install -g bore-cli 2>/dev/null || apt install -y bore 2>/dev/null
+    npm install -g bore-cli
     
     # LocalTunnel
     log_info "Installing LocalTunnel..."
     npm install -g localtunnel
     
-    # Cloudflare Tunnel
-    log_info "Setting up Cloudflare Tunnel..."
-    wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 \
-        -O $PREFIX/bin/cloudflared 2>/dev/null || \
-    wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm \
-        -O $PREFIX/bin/cloudflared 2>/dev/null || \
-    log_warning "Cloudflared download failed, install manually"
+    # Cloudflare Tunnel (ARM64 or ARM)
+    log_info "Downloading Cloudflare Tunnel..."
+    ARCH=$(uname -m)
     
-    chmod +x $PREFIX/bin/cloudflared 2>/dev/null || true
+    if [[ "$ARCH" == "aarch64" ]]; then
+        CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
+    else
+        CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm"
+    fi
+    
+    if wget -q "$CLOUDFLARED_URL" -O $PREFIX/bin/cloudflared 2>/dev/null; then
+        chmod +x $PREFIX/bin/cloudflared
+        log_success "Cloudflared installed"
+    else
+        log_warning "Cloudflared download failed (optional)"
+    fi
     
     log_success "Tunnels installed"
 }
@@ -146,8 +146,11 @@ import os
 from dotenv import load_dotenv
 import json
 from datetime import datetime
+import sys
 
-load_dotenv(os.path.join(os.path.dirname(__file__), '../../config/.env'))
+# Load .env from config directory
+config_path = os.path.join(os.path.dirname(__file__), '../../config/.env')
+load_dotenv(config_path)
 
 app = Flask(__name__)
 CORS(app)
@@ -193,8 +196,14 @@ def stop_miner():
     return jsonify({'status': 'stopped'})
 
 if __name__ == '__main__':
-    port = int(os.getenv('API_PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    try:
+        port = int(os.getenv('API_PORT', 5000))
+        host = os.getenv('API_HOST', '0.0.0.0')
+        print(f"Starting JV93 API on {host}:{port}")
+        app.run(host=host, port=port, debug=False, threaded=True)
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 FLASK_EOF
 
     # Miner
@@ -205,17 +214,20 @@ import time
 from dotenv import load_dotenv
 import sys
 
-load_dotenv(os.path.join(os.path.dirname(__file__), '../../config/.env'))
+# Load .env from config directory
+config_path = os.path.join(os.path.dirname(__file__), '../../config/.env')
+load_dotenv(config_path)
 
 class TermuxMiner:
     def __init__(self):
         self.pool_url = os.getenv('POOL_URL', 'stratum+tcp://pool.example.com:3333')
         self.wallet = os.getenv('WALLET_ADDRESS', 'default_wallet')
-        self.threads = int(os.getenv('MINER_THREADS', 2))
+        self.threads = int(os.getenv('MINER_THREADS', 1))
         self.running = False
         
     def log(self, msg):
-        print(f"[MINER] {msg}")
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{timestamp}] [MINER] {msg}")
         sys.stdout.flush()
     
     def start(self):
@@ -226,16 +238,24 @@ class TermuxMiner:
         self.log("Mining started. Press Ctrl+C to stop")
         
         try:
+            counter = 0
             while self.running:
+                counter += 1
                 time.sleep(60)
-                self.log("Mining... (hash rate: N/A)")
+                self.log(f"Mining... Cycle {counter} (hash rate: N/A)")
         except KeyboardInterrupt:
             self.log("Mining stopped by user")
             self.running = False
 
 if __name__ == '__main__':
-    miner = TermuxMiner()
-    miner.start()
+    try:
+        miner = TermuxMiner()
+        miner.start()
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 MINER_EOF
 
     # Config
@@ -243,7 +263,8 @@ MINER_EOF
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+config_path = os.path.join(os.path.dirname(__file__), '../../config/.env')
+load_dotenv(config_path)
 
 class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'termux-dev-key')
@@ -251,7 +272,7 @@ class Config:
     API_PORT = int(os.getenv('API_PORT', 5000))
     POOL_URL = os.getenv('POOL_URL')
     WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
-    MINER_THREADS = int(os.getenv('MINER_THREADS', 2))
+    MINER_THREADS = int(os.getenv('MINER_THREADS', 1))
 CONFIG_EOF
 
     chmod +x $REPO_DIR/src/api/app.py
@@ -274,7 +295,7 @@ SECRET_KEY=change-this-secret-key
 # Mining
 POOL_URL=stratum+tcp://pool.example.com:3333
 WALLET_ADDRESS=your_wallet_address_here
-MINER_THREADS=2
+MINER_THREADS=1
 
 # Tunnels
 LOCALTUNNEL_SUBDOMAIN=jv93-termux
@@ -301,6 +322,10 @@ REPO_DIR=$HOME/jv93
 cd $REPO_DIR
 
 echo "[JV93] Starting API server..."
+echo "[JV93] Access at: http://localhost:5000"
+echo "[JV93] Health check: curl http://localhost:5000/health"
+echo ""
+
 python $REPO_DIR/src/api/app.py
 API_EOF
 
@@ -311,6 +336,9 @@ REPO_DIR=$HOME/jv93
 cd $REPO_DIR
 
 echo "[JV93] Starting miner..."
+echo "[JV93] Press Ctrl+C to stop"
+echo ""
+
 python $REPO_DIR/src/miner/core.py
 MINER_EOF
 
@@ -329,8 +357,6 @@ usage() {
     echo "  bore              - Start Bore tunnel"
     echo "  localtunnel       - Start LocalTunnel"
     echo "  cloudflare        - Start Cloudflare tunnel"
-    echo "  all               - Start all tunnels"
-    echo "  stop              - Stop all tunnels"
     echo ""
     echo "Examples:"
     echo "  bash tunnels.sh bore"
@@ -343,30 +369,21 @@ usage() {
 case "$1" in
     bore)
         echo "Starting Bore tunnel on port 8080..."
-        echo "Access: bore://localhost:8080"
+        echo "API at: http://localhost:5000"
+        echo ""
         bore local 5000 --to bore.pub --port 8080
         ;;
     localtunnel)
         echo "Starting LocalTunnel..."
-        lt --port 5000 --subdomain jv93-termux
+        echo "Random subdomain will be assigned"
+        echo ""
+        lt --port 5000
         ;;
     cloudflare)
         echo "Starting Cloudflare tunnel..."
-        echo "Configure at: https://dash.cloudflare.com/"
-        cloudflared tunnel run jv93-termux
-        ;;
-    all)
-        echo "Starting all tunnels..."
-        echo "Open new Termux sessions for each tunnel:"
+        echo "First time: login at https://dash.cloudflare.com/"
         echo ""
-        echo "Session 1: bash tunnels.sh bore"
-        echo "Session 2: bash tunnels.sh localtunnel"
-        echo "Session 3: bash tunnels.sh cloudflare"
-        ;;
-    stop)
-        echo "Stopping all tunnels..."
-        pkill -f "bore\|localtunnel\|cloudflared"
-        echo "Tunnels stopped"
+        cloudflared tunnel run jv93-termux 2>/dev/null || echo "Configure Cloudflare first"
         ;;
     *)
         usage
@@ -385,13 +402,11 @@ show_menu() {
     echo "╠═══════════════════════════════════════════════╣"
     echo "║ 1) Start API Server                           ║"
     echo "║ 2) Start Miner                                ║"
-    echo "║ 3) Start Both (API + Miner)                   ║"
-    echo "║ 4) Tunnels Menu                               ║"
-    echo "║ 5) View Configuration                         ║"
-    echo "║ 6) Edit Configuration                         ║"
-    echo "║ 7) View Logs                                  ║"
-    echo "║ 8) API Health Check                           ║"
-    echo "║ 9) Exit                                       ║"
+    echo "║ 3) Tunnels Menu                               ║"
+    echo "║ 4) View Configuration                         ║"
+    echo "║ 5) Edit Configuration                         ║"
+    echo "║ 6) API Health Check                           ║"
+    echo "║ 7) Exit                                       ║"
     echo "╚═══════════════════════════════════════════════╝"
     echo ""
 }
@@ -404,8 +419,7 @@ tunnels_menu() {
     echo "║ 1) Bore (No account needed)                   ║"
     echo "║ 2) LocalTunnel (Simple)                       ║"
     echo "║ 3) Cloudflare (Professional)                  ║"
-    echo "║ 4) All Tunnels                                ║"
-    echo "║ 5) Back to Main Menu                          ║"
+    echo "║ 4) Back to Main Menu                          ║"
     echo "╚═══════════════════════════════════════════════╝"
     echo ""
 }
@@ -428,11 +442,6 @@ while true; do
             bash $REPO_DIR/scripts/start_miner.sh
             ;;
         3)
-            echo "Starting API and Miner..."
-            sleep 1
-            echo "API will start in new session, then run miner"
-            ;;
-        4)
             while true; do
                 tunnels_menu
                 read -p "Choose tunnel: " tunnel_choice
@@ -440,27 +449,24 @@ while true; do
                     1) bash $REPO_DIR/scripts/tunnels.sh bore ;;
                     2) bash $REPO_DIR/scripts/tunnels.sh localtunnel ;;
                     3) bash $REPO_DIR/scripts/tunnels.sh cloudflare ;;
-                    4) bash $REPO_DIR/scripts/tunnels.sh all ;;
-                    5) break ;;
+                    4) break ;;
                     *) echo "Invalid option" ;;
                 esac
             done
             ;;
-        5)
+        4)
             cat $REPO_DIR/config/.env
             read -p "Press Enter to continue..."
             ;;
-        6)
+        5)
             nano $REPO_DIR/config/.env
             ;;
-        7)
-            tail -f $REPO_DIR/logs/jv93.log 2>/dev/null || echo "No logs yet"
-            ;;
-        8)
-            curl -s http://localhost:5000/health | jq . 2>/dev/null || echo "API not responding"
+        6)
+            echo "Checking API health..."
+            curl -s http://localhost:5000/health 2>/dev/null | python -m json.tool 2>/dev/null || echo "API not responding. Start it first!"
             read -p "Press Enter to continue..."
             ;;
-        9)
+        7)
             echo "Goodbye!"
             exit 0
             ;;
@@ -476,37 +482,8 @@ LAUNCH_EOF
     log_success "Scripts created"
 }
 
-setup_sessions() {
-    log_info "Creating Termux session helpers..."
-    
-    # tmux config for persistent sessions
-    cat > $HOME/.tmux.conf << 'TMUX_EOF'
-# JV93 Termux tmux config
-set -g default-terminal "screen-256color"
-set -g history-limit 10000
-set -g pane-border-status bottom
-
-# New window
-bind c new-window -c "#{pane_current_path}"
-
-# Copy mode
-setw -g mode-keys vi
-
-# Easy refresh
-bind r source-file ~/.tmux.conf
-
-# Pane navigation
-bind h select-pane -L
-bind j select-pane -D
-bind k select-pane -U
-bind l select-pane -R
-TMUX_EOF
-
-    log_success "Termux session config created"
-}
-
-create_readme() {
-    log_info "Creating README..."
+create_docs() {
+    log_info "Creating documentation..."
     
     cat > $REPO_DIR/README_TERMUX.md << 'README_EOF'
 # JV93 - Termux Edition
@@ -529,7 +506,7 @@ bash install_termux.sh
 bash $HOME/jv93/scripts/launcher.sh
 ```
 
-### Method 2: Manual Start
+### Method 2: Manual Start (Recommended)
 
 **Terminal 1 - API Server:**
 ```bash
@@ -554,13 +531,13 @@ nano $HOME/jv93/config/.env
 ```
 
 Set your:
-- WALLET_ADDRESS
-- POOL_URL
-- MINER_THREADS (usually 1-2 for phones)
+- **WALLET_ADDRESS** - Your crypto wallet address (from your seed)
+- **POOL_URL** - Mining pool (e.g., stratum+tcp://pool.example.com:3333)
+- **MINER_THREADS** - CPU threads (1-2 for phones)
 
-## Tunnels
+## Tunnels (Choose One)
 
-Run tunnels in separate Termux sessions:
+Run in separate Termux session:
 
 **Bore (Simplest):**
 ```bash
@@ -579,12 +556,11 @@ bash $HOME/jv93/scripts/tunnels.sh cloudflare
 
 ## Multiple Sessions
 
-Use Termux app to open new sessions:
-1. Tap the terminal icon at bottom
-2. Tap "+" to open new session
-3. Run different scripts in each
+Method 1: Use Termux menu
+- Tap the terminal icon at bottom
+- Tap "+" to open new session
 
-Or use tmux:
+Method 2: Use tmux
 ```bash
 tmux new-session -d -s api bash $HOME/jv93/scripts/start_api.sh
 tmux new-session -d -s miner bash $HOME/jv93/scripts/start_miner.sh
@@ -593,65 +569,63 @@ tmux list-sessions
 
 ## API Endpoints
 
-- Health: `curl http://localhost:5000/health`
-- Stats: `curl http://localhost:5000/api/stats`
-- Wallet: `curl http://localhost:5000/api/wallet`
-
-## Power Usage
-
-Mining on mobile uses significant battery and CPU.
-
-### Optimize for Battery:
 ```bash
-# Reduce threads
-MINER_THREADS=1
+# Health check
+curl http://localhost:5000/health
 
-# Lower API workers
-API_WORKERS=1
+# Stats
+curl http://localhost:5000/api/stats
+
+# Wallet info
+curl http://localhost:5000/api/wallet
 ```
 
-## Storage
+## Power & Battery Tips
 
-- Data: `$HOME/jv93/data/`
-- Logs: `$HOME/jv93/logs/`
-- Config: `$HOME/jv93/config/.env`
-
-## Tips
-
-1. **Use Termux Notification Plugin** for background alerts
-2. **Run on WiFi** to avoid mobile data drain
-3. **Keep screen off** to save battery
-4. **Monitor temperature** - Android throttles at high temps
-5. **Use task killer** to stop when needed
+1. **Use WiFi** - Faster and cheaper than mobile data
+2. **Reduce threads** - Set MINER_THREADS=1 for battery
+3. **Keep screen off** - Saves significant battery
+4. **Monitor temperature** - Android throttles if too hot
+5. **Short sessions** - Don't leave mining on 24/7
 
 ## Troubleshooting
 
-### Port already in use:
+### Port already in use
 ```bash
-# Kill existing process
 pkill -f "python.*app.py"
+pkill -f "python.*core.py"
 ```
 
-### Connection refused:
+### API not responding
 ```bash
-# Check if API is running
-curl http://localhost:5000/health
+# Check if running
+ps aux | grep python
+
+# Start API again
+bash $HOME/jv93/scripts/start_api.sh
 ```
 
-### Low mining rate:
-- Reduce MINER_THREADS
-- Check pool URL and wallet address
-- Verify internet connection
+### Can't install packages
+```bash
+apt update
+apt upgrade -y
+```
 
-## Resources
+## Directories
 
-- Termux: https://termux.com
-- GitHub: https://github.com/sdoukoure12/JV93
-- Bore: https://bore.pub
+```
+$HOME/jv93/
+├── src/          - Application code
+├── config/       - .env configuration
+├── scripts/      - Management scripts
+├── data/         - Wallet database
+├── logs/         - Log files
+└── tunnels/      - Tunnel helpers
+```
 
 README_EOF
 
-    log_success "README created"
+    log_success "Documentation created"
 }
 
 print_summary() {
@@ -661,61 +635,68 @@ ${GREEN}╔═══════════════════════
 ${GREEN}║  JV93 Termux Installation Complete! ✓             ║${NC}
 ${GREEN}╚════════════════════════════════════════════════════╝${NC}
 
-${CYAN}📱 Installation Path:${NC}
+${CYAN}📱 Installation Complete at:${NC}
   $HOME/jv93
 
-${CYAN}🚀 Quick Start:${NC}
+${CYAN}🚀 Start Mining Now:${NC}
 
-  ${YELLOW}1. Start Interactive Launcher:${NC}
+  ${YELLOW}Option 1 - Interactive Launcher:${NC}
      bash $HOME/jv93/scripts/launcher.sh
 
-  ${YELLOW}2. Or start manually:${NC}
-     # Terminal 1 - API
+  ${YELLOW}Option 2 - Open 3 Termux Sessions:${NC}
+     
+     Session 1 - API Server:
      bash $HOME/jv93/scripts/start_api.sh
      
-     # Terminal 2 - Miner
+     Session 2 - Miner:
      bash $HOME/jv93/scripts/start_miner.sh
      
-     # Terminal 3 - Tunnel
+     Session 3 - Tunnel:
      bash $HOME/jv93/scripts/tunnels.sh localtunnel
 
-${CYAN}⚙️  Configure:${NC}
+${CYAN}⚙️  Configure First:${NC}
   nano $HOME/jv93/config/.env
   
   Set:
-  - WALLET_ADDRESS (your seed wallet)
-  - POOL_URL (mining pool stratum)
-  - MINER_THREADS (1-2 for phones)
+  • WALLET_ADDRESS - Your wallet from seed
+  • POOL_URL - Mining pool stratum address
+  • MINER_THREADS - 1 or 2 (not more on phones)
 
-${CYAN}🌐 Tunnels (Choose one):${NC}
+${CYAN}🌐 Tunnels Available:${NC}
   • Bore: bash $HOME/jv93/scripts/tunnels.sh bore
   • LocalTunnel: bash $HOME/jv93/scripts/tunnels.sh localtunnel
   • Cloudflare: bash $HOME/jv93/scripts/tunnels.sh cloudflare
 
-${CYAN}📊 Monitor:${NC}
-  API Health: curl http://localhost:5000/health
-  Stats: curl http://localhost:5000/api/stats
-  Wallet: curl http://localhost:5000/api/wallet
+${CYAN}📊 Check API Health:${NC}
+  curl http://localhost:5000/health
+  curl http://localhost:5000/api/stats
+  curl http://localhost:5000/api/wallet
 
-${CYAN}💡 Tips:${NC}
-  ✓ Use multiple Termux sessions (tap + at bottom)
-  ✓ Mining uses lots of battery - monitor temperature
-  ✓ Use WiFi for best performance
-  ✓ Keep screen off to save power
+${CYAN}📱 How to Open Multiple Sessions:${NC}
+  1. In Termux, tap terminal icon at bottom
+  2. Tap + button to add new session
+  3. Repeat for each service (API, Miner, Tunnel)
 
-${CYAN}📱 Multi-Session Setup:${NC}
-  1. Open Termux
-  2. Tap + button at bottom (3+ times)
-  3. In each session:
-     - Session 1: bash $HOME/jv93/scripts/start_api.sh
-     - Session 2: bash $HOME/jv93/scripts/start_miner.sh
-     - Session 3: bash $HOME/jv93/scripts/tunnels.sh localtunnel
+${CYAN}💡 Tips for Termux:${NC}
+  ✓ Use WiFi (better than mobile data)
+  ✓ Keep screen off to save battery
+  ✓ Monitor device temperature
+  ✓ Don't mine 24/7 (battery drain)
+  ✓ Set threads to 1-2 max
 
 ${YELLOW}⚠️  Important:${NC}
-  • Keep your seed phrase SAFE - never share it!
-  • Monitor device temperature during mining
-  • Don't leave mining on for too long (battery drain)
-  • Use strong API credentials in production
+  • Keep your seed phrase SAFE - never share!
+  • Edit .env with YOUR wallet address
+  • Configure pool URL correctly
+  • Monitor temperature during mining
+
+${CYAN}📁 Locations:${NC}
+  Config: $HOME/jv93/config/.env
+  Logs: $HOME/jv93/logs/
+  Data: $HOME/jv93/data/
+
+${CYAN}📖 Full Guide:${NC}
+  cat $HOME/jv93/README_TERMUX.md
 
 EOF
 }
@@ -723,7 +704,8 @@ EOF
 main() {
     clear
     echo -e "${CYAN}╔══════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  JV93 Termux Installation Started        ║${NC}"
+    echo -e "${CYAN}║  JV93 Termux Installation                ║${NC}"
+    echo -e "${CYAN}║  Fixed for Termux Packages               ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════╝${NC}"
     echo ""
     
@@ -736,8 +718,7 @@ main() {
     create_python_files
     create_config
     create_scripts
-    setup_sessions
-    create_readme
+    create_docs
     
     echo ""
     log_success "Installation completed!"
